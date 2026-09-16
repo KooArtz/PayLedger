@@ -1,0 +1,14 @@
+import test,{after} from "node:test";
+import assert from "node:assert/strict";
+import {promises as fs} from "node:fs";
+import {tmpdir} from "node:os";
+import path from "node:path";
+const dir=await fs.mkdtemp(path.join(tmpdir(),"ledger-store-tests-"));
+Object.assign(process.env,{NODE_ENV:"test",LEDGER_LOCAL_DATA_DIR:dir});
+for(const key of ["VERCEL","KV_REST_API_URL","KV_REST_API_TOKEN","UPSTASH_REDIS_REST_URL","UPSTASH_REDIS_REST_TOKEN"])delete process.env[key];
+const store=await import("../lib/store");
+after(async()=>{const target=path.resolve(dir);if(!target.startsWith(path.join(path.resolve(tmpdir()),"ledger-store-tests-")))throw new Error("Unexpected test cleanup path.");await fs.rm(target,{recursive:true,force:true})});
+test("only one concurrent initialization can claim a workspace",async()=>{const writes=await Promise.all(Array.from({length:12},(_,i)=>store.kvCompareAndSet("new",null,JSON.stringify({revision:1,owner:i}))));assert.equal(writes.filter(Boolean).length,1)});
+test("only one concurrent writer can save a given revision",async()=>{await store.kvSet("workspace",JSON.stringify({revision:1,total:0}));const writes=await Promise.all(Array.from({length:16},(_,i)=>store.kvCompareAndSet("workspace",1,JSON.stringify({revision:2,total:i+1}))));assert.equal(writes.filter(Boolean).length,1);assert.equal(JSON.parse((await store.kvGet("workspace"))!).revision,2)});
+test("simultaneous snapshot and workspace writes preserve both",async()=>{await Promise.all([store.kvSet("business",JSON.stringify({revision:5})),...Array.from({length:10},(_,i)=>store.kvLPush("snapshots",String(i)))]);await store.kvLTrim("snapshots",0,4);assert.equal(JSON.parse((await store.kvGet("business"))!).revision,5);assert.equal(JSON.parse((await store.kvGet("snapshots"))!).length,5)});
+test("corrupt local storage fails without replacing records",async()=>{await fs.writeFile(path.join(dir,"store.json"),"corrupt-existing-data");await assert.rejects(()=>store.kvSet("new","value"),/preserved/);assert.equal(await fs.readFile(path.join(dir,"store.json"),"utf8"),"corrupt-existing-data")});

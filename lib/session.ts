@@ -1,0 +1,7 @@
+import {createHmac,timingSafeEqual,randomBytes} from "node:crypto";
+export type SessionUser={userId:string;email:string;fullName:string};
+const localSecret=randomBytes(32).toString("hex");
+function secret(){const configured=process.env.SESSION_SECRET;if(configured&&configured.length>=32)return configured;if(process.env.NODE_ENV!=="production")return localSecret;throw new Error("Set SESSION_SECRET to a random value of at least 32 characters.")}
+export function demoEnabled(){return process.env.NODE_ENV!=="production"||process.env.LEDGER_DEMO_MODE==="true"}
+export function signSession(user:SessionUser){const payload=Buffer.from(JSON.stringify({...user,expires:Date.now()+30*86400000})).toString("base64url");return payload+"."+createHmac("sha256",secret()).update(payload).digest("base64url")}
+export function verifySession(raw:string):SessionUser|null{try{const parts=raw.split(".");if(parts.length!==2)return null;const expected=createHmac("sha256",secret()).update(parts[0]).digest();const signature=Buffer.from(parts[1],"base64url");if(signature.length!==expected.length||!timingSafeEqual(signature,expected))return null;const u=JSON.parse(Buffer.from(parts[0],"base64url").toString("utf8"));if(typeof u.userId!=="string"||!u.userId||typeof u.email!=="string"||!u.email||typeof u.fullName!=="string"||typeof u.expires!=="number"||u.expires<Date.now())return null;return{userId:u.userId,email:u.email,fullName:u.fullName}}catch{return null}}
